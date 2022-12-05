@@ -14,8 +14,6 @@
 #include <iostream>
 #include <fstream>
 
-extern bool printttt;
-MacAddress add (0x0AAA00000001);
 
 namespace flora {
 
@@ -29,7 +27,7 @@ void NetworkServerApp::initialize(int stage)
         localPort = par("localPort");
         destPort = par("destPort");
         adrMethod = par("adrMethod").stdstringValue();
-        std::cout<<"ADR Methode is: "<< adrMethod<<"\n";
+        std::cout<<"ADR Method is: "<< adrMethod<<"\n";
     } else if (stage == INITSTAGE_APPLICATION_LAYER) {
         startUDP();
         getSimulation()->getSystemModule()->subscribe("LoRa_AppPacketSent", this);
@@ -37,6 +35,7 @@ void NetworkServerApp::initialize(int stage)
         adrDeviceMargin = par("adrDeviceMargin");
         receivedRSSI.setName("Received RSSI");
         totalReceivedPackets = 0;
+        totalReceivedUniquePackets = 0;
 
 
         for(int i=0;i<6;i++){
@@ -63,6 +62,13 @@ void NetworkServerApp::handleMessage(cMessage *msg)
         if (frame == nullptr)
             throw cRuntimeError("Header error type");
         //LoRaMacFrame *frame = check_and_cast<LoRaMacFrame *>(msg);
+        ///////////////////////////////////////////////////////////////////////////////////
+        if(adrMethod == "LP-MAB"){
+            if( simTime() >= (LP-MAB_first_stage*24*60*60)){
+                totalReceivedPackets++;
+            }
+        }
+        ///////////////////////////////////////////////////////////////////////////////////
 
         else
             totalReceivedPackets++;
@@ -88,10 +94,8 @@ void NetworkServerApp::processLoraMACPacket(Packet *pk)
 
 void NetworkServerApp::finish()
 {
-    //    cout << "total_adr_sent" << adr_sent_count;
     for(uint i=0;i<knownNodes.size();i++)
     {
-
         delete knownNodes[i].historyAllSNIR;
         delete knownNodes[i].historyAllRSSI;
         delete knownNodes[i].receivedSeqNumber;
@@ -156,7 +160,7 @@ void NetworkServerApp::finish()
         recordScalar("DER SF12", double(counterUniqueReceivedPacketsPerSF[5]) / counterOfSentPacketsFromNodesPerSF[5]);
     else
         recordScalar("DER SF12", 0);
-    }
+
 }
 
 bool NetworkServerApp::isPacketProcessed(const Ptr<const LoRaMacFrame> &pkt)
@@ -187,6 +191,10 @@ void NetworkServerApp::updateKnownNodes(Packet* pkt)
 
     if(nodeExist == false)
     {
+        ////////////////////////serati//////////////////////////
+        if(simTime() > 3*24*60*60)
+            totalReceivedUniquePackets++;
+        ////////////////////////////////////////////////////////
         knownNode newNode;
         newNode.srcAddr= frame->getTransmitterAddress();
         newNode.lastSeqNoProcessed = frame->getSequenceNumber();
@@ -219,18 +227,23 @@ void NetworkServerApp::updateKnownNodes(Packet* pkt)
         newNode.receivedSeqNumber->setName("Received Sequence number");
         newNode.calculatedSNRmargin = new cOutVector;
         newNode.calculatedSNRmargin->setName("Calculated SNRmargin in ADR");
+        ////////////////LP-MAB//////////////////////
+        if(adrMethod == "LP-MAB"){
+            newNode.c_table.end_node_sending_interval = par("sending_interval");
+            newNode.c_table.init_table("LP-MAB");
+            LP-MAB_first_stage = newNode.c_table.max_explr_days;
+
         }
-        if (adrMethod == "ADR-Lite"){
-            newNode.c_table.init_table();
+        else if (adrMethod == "ADR-Lite"){
+            newNode.c_table.init_table("ADR-Lite");
             newNode.c_table.tkn.addr = frame->getTransmitterAddress();
             newNode.c_table.tkn.ceil = newNode.c_table.RSSI_table_size-1;
             newNode.c_table.tkn.floor = 0;
             newNode.c_table.tkn.rtc.idx = newNode.c_table.RSSI_table_size-1;
         }
-
         /////////////////////////////////////
         knownNodes.push_back(newNode);
-    
+    }
 }
 
 void NetworkServerApp::addPktToProcessingTable(Packet* pkt)
@@ -332,6 +345,7 @@ void NetworkServerApp::evaluateADR(Packet* pkt, L3Address pickedGateway, double 
 
     pkt->trimFront();
     auto frame = pkt->removeAtFront<LoRaMacFrame>();
+
     double calculatedPowerdBm = math::mW2dBmW(frame->getLoRaTP()) + 30;
 
     const auto & rcvAppPacket = pkt->peekAtFront<LoRaAppPacket>();
@@ -339,10 +353,6 @@ void NetworkServerApp::evaluateADR(Packet* pkt, L3Address pickedGateway, double 
     if(rcvAppPacket->getOptions().getADRACKReq())
     {
         sendADRAckRep = true;
-
-        if(frame->getTransmitterAddress() == add && printttt){
-            std::cout<<"\nNode Wants Feedback :)" << std::endl;
-        }
     }
 
     for(uint i=0;i<knownNodes.size();i++)
@@ -356,6 +366,9 @@ void NetworkServerApp::evaluateADR(Packet* pkt, L3Address pickedGateway, double 
 
             if(knownNodes[i].adrListSNIR.size() == 20) knownNodes[i].adrListSNIR.pop_front();
             if(knownNodes[i].adrListRSSI.size() == 20) knownNodes[i].adrListRSSI.pop_front();
+//            if(knownNodes[i].adrListSeqNo.size() == 20) knownNodes[i].adrListSeqNo.pop_front();
+            ///////////////////Zargari///////////////////
+            if(knownNodes[i].adrListSeqNo.size() == 20)  knownNodes[i].adrListSeqNo.erase(knownNodes[i].adrListSeqNo.begin());
             ////////////////////////////////////////////////////
             knownNodes[i].adrListSNIR.push_back(SNIRinGW);
             knownNodes[i].adrListRSSI.push_back(RSSIinGW);
@@ -364,8 +377,124 @@ void NetworkServerApp::evaluateADR(Packet* pkt, L3Address pickedGateway, double 
 
             ////////////////////////////////////////////////////////////////////////////
             int wait_time_to_ack = 20;
+            ////////////////////////////////////////////////////////////////////////////
+            else if(adrMethod == "LP-MAB"){
+                int next_setup = 0;
+                int rcvd_idx;
+                int rcvd_sf = frame->getLoRaSF();
+                int rcvd_tp = math::mW2dBmW(frame->getLoRaTP()) + 30;
+                int rcvd_cr = frame->getLoRaCR();
+                units::values::Hz rcvd_bw = frame->getLoRaBW();
+                units::values::Hz rcvd_cf = frame->getLoRaCF();
+
+
+                rcvd_idx = knownNodes[nodeIndex].c_table.get_rssi_table_cell_index(rcvd_sf, rcvd_tp,
+                        knownNodes[nodeIndex].c_table.Hz_to_int(rcvd_bw, ' '), rcvd_cr,
+                        knownNodes[nodeIndex].c_table.Hz_to_int(rcvd_cf, ' '));
+                knownNodes[nodeIndex].c_table.RSSI_table.at(rcvd_idx).num_server_rcvd++;
+                if(knownNodes[nodeIndex].c_table.is_explr){
+                    wait_time_to_ack = 9999;
+                    sendADRAckRep = false;
+
+                    if(!knownNodes[nodeIndex].c_table.explr_started){
+                        knownNodes[nodeIndex].c_table.RSSI_table.at(0).num_node_sent = 1;
+                        knownNodes[nodeIndex].c_table.explr_started = true;
+                    }
+
+                    if(rcvd_idx-knownNodes[nodeIndex].c_table.prev_sent_idx > 0){
+                        for(int i=0, j=knownNodes[nodeIndex].c_table.prev_sent_idx+1;
+                                i<rcvd_idx-knownNodes[nodeIndex].c_table.prev_sent_idx; i++,j++)
+                            knownNodes[nodeIndex].c_table.RSSI_table.at(j).num_node_sent++;
+                    }
+                    else if(rcvd_idx-knownNodes[nodeIndex].c_table.prev_sent_idx < 0){
+                        for(int i=0, j=knownNodes[nodeIndex].c_table.prev_sent_idx+1;
+                                i<knownNodes[nodeIndex].c_table.RSSI_table_size - 1 - knownNodes[nodeIndex].c_table.prev_sent_idx; i++,j++)
+                            knownNodes[nodeIndex].c_table.RSSI_table.at(j).num_node_sent++;
+                        for(int i=0, j=0;
+                                i<=rcvd_idx; i++,j++)
+                            knownNodes[nodeIndex].c_table.RSSI_table.at(j).num_node_sent++;
+                    }
+                    else if(rcvd_idx-knownNodes[nodeIndex].c_table.prev_sent_idx == 0){
+                        for(int i=0; i<=rcvd_idx; i++)
+                            knownNodes[nodeIndex].c_table.RSSI_table.at(i).num_node_sent++;
+                        for(int i=rcvd_idx+1; i<knownNodes[nodeIndex].c_table.RSSI_table_size; i++)
+                            knownNodes[nodeIndex].c_table.RSSI_table.at(i).num_node_sent++;
+                    }
+                    int count = 0;
+                    for(int i=0; i<knownNodes[nodeIndex].c_table.RSSI_table_size; i++){
+                        if(knownNodes[nodeIndex].c_table.RSSI_table.at(i).num_node_sent >
+                            knownNodes[nodeIndex].c_table.explr_itr_lim)
+                            knownNodes[nodeIndex].c_table.RSSI_table.at(i).num_node_sent =
+                                    knownNodes[nodeIndex].c_table.explr_itr_lim;
+                        count += knownNodes[nodeIndex].c_table.RSSI_table.at(i).num_node_sent;
+                    }
+
+                    knownNodes[nodeIndex].c_table.cal_prob();
+                    if(frame->getTransmitterAddress() == add){
+                        knownNodes[nodeIndex].c_table.cal_weight(rcvd_idx, rcvd_idx, true);
+                    }
+                    else{
+                        knownNodes[nodeIndex].c_table.cal_weight(rcvd_idx, rcvd_idx, false);
+                    }
+                    int lim = knownNodes[nodeIndex].c_table.RSSI_table_size*knownNodes[nodeIndex].c_table.explr_itr_lim;
+
+                    if(count >= lim){
+                        knownNodes[nodeIndex].c_table.exploraton_done();
+                        knownNodes[i].framesFromLastADRCommand = 0;
+                        sendADRAckRep = true;
+                    }
+                    knownNodes[nodeIndex].c_table.prev_sent_idx = rcvd_idx;
+                }
+                else if (knownNodes[nodeIndex].c_table.is_explt){
+                    wait_time_to_ack = 20;
+                    if(!knownNodes[nodeIndex].c_table.more_than_one_exploration){
+                        for (int i=0; i<knownNodes[nodeIndex].c_table.RSSI_table_size; i++){
+                            if(knownNodes[nodeIndex].c_table.RSSI_table.at(i).num_server_rcvd >
+                                knownNodes[nodeIndex].c_table.alpha * knownNodes[nodeIndex].c_table.explotation_itr){
+                                for (int i=0; i<knownNodes[nodeIndex].c_table.RSSI_table_size; i++){
+                                    knownNodes[nodeIndex].c_table.RSSI_table.at(i).num_node_sent = 0;
+                                }
+                                knownNodes[nodeIndex].c_table.alpha ++;
+                                knownNodes[nodeIndex].c_table.more_than_one_exploration = true;
+                                int max = -1;
+                                for (int k=0; k<knownNodes[nodeIndex].c_table.RSSI_table_size; k++){
+                                    if(knownNodes[nodeIndex].c_table.RSSI_table.at(k).num_server_rcvd > max )
+                                        max = knownNodes[nodeIndex].c_table.RSSI_table.at(k).num_server_rcvd;
+                                }
+                                for (int i=0; i<knownNodes[nodeIndex].c_table.RSSI_table_size; i++){
+                                    knownNodes[nodeIndex].c_table.RSSI_table_at_least_one_recvd_array[i][0] = false;
+                                    for(int j=1; j<knownNodes[nodeIndex].c_table.explr_itr_lim+1; j++)
+                                        knownNodes[nodeIndex].c_table.RSSI_table_at_least_one_recvd_array[i][j] = false;
+                                    if(knownNodes[nodeIndex].c_table.RSSI_table.at(i).num_server_rcvd >= max/2){
+                                        knownNodes[nodeIndex].c_table.RSSI_table_at_least_one_recvd_array[i][0]= true;
+                                        knownNodes[nodeIndex].c_table.RSSI_table.at(i).num_server_rcvd = 1;
+                                        knownNodes[nodeIndex].c_table.RSSI_table.at(i).num_server_sent = 1;
+                                    }
+                                }
+                                sendADRAckRep = true;
+                                break;
+                            }
+                        }
+                    }
+                    else if(knownNodes[nodeIndex].c_table.more_than_one_exploration){
+                        knownNodes[nodeIndex].c_table.RSSI_table.at(rcvd_idx).num_node_sent++;
+                        sendADRAckRep = true;
+                    }
+                    knownNodes[nodeIndex].c_table.cal_prob();
+                    if(frame->getTransmitterAddress() == add){
+                        knownNodes[nodeIndex].c_table.cal_weight(rcvd_idx,
+                                knownNodes[nodeIndex].c_table.prev_sent_idx, true);
+                    }
+                    else{
+                        knownNodes[nodeIndex].c_table.cal_weight(rcvd_idx,
+                                knownNodes[nodeIndex].c_table.prev_sent_idx, false);
+                    }
+
+                    knownNodes[nodeIndex].c_table.rcvd_idx = rcvd_idx;
+
+                }
+            }
             else if(adrMethod == "ADR-Lite" ){
-//                wait_time_to_ack = 100000000000000000000000;
                 int rcvd_idx;
                 int rcvd_sf = frame->getLoRaSF();
                 int rcvd_tp = math::mW2dBmW(frame->getLoRaTP()) + 30;
@@ -376,20 +505,13 @@ void NetworkServerApp::evaluateADR(Packet* pkt, L3Address pickedGateway, double 
                         knownNodes[nodeIndex].c_table.Hz_to_int(rcvd_bw, ' '), rcvd_cr,
                         knownNodes[nodeIndex].c_table.Hz_to_int(rcvd_cf, ' '));
 
-                if(printttt){
-                    std::cout<<"Server Received: "<<rcvd_sf <<"-" << rcvd_tp <<"-" << rcvd_cf << "-" << rcvd_bw<<" - " << rcvd_cr;
-                    std::cout << " idx: " << rcvd_idx << std::endl;
-                }
-
             }
-
-            if(knownNodes[i].framesFromLastADRCommand == wait_time_to_ack || sendADRAckRep){                }
+            if(knownNodes[i].framesFromLastADRCommand == wait_time_to_ack || sendADRAckRep){
                 sendADR = true;
                 if(adrMethod == "max"){
                     SNRm = *max_element(knownNodes[i].adrListSNIR.begin(), knownNodes[i].adrListSNIR.end());
 
                 }
-
                 else if(adrMethod == "min"){
                     SNRm = *min_element(knownNodes[i].adrListSNIR.begin(), knownNodes[i].adrListSNIR.end());
                 }
@@ -459,9 +581,6 @@ void NetworkServerApp::evaluateADR(Packet* pkt, L3Address pickedGateway, double 
             rcvd_idx = knownNodes[nodeIndex].c_table.get_rssi_table_cell_index(rcvd_sf, rcvd_tp,
                                     knownNodes[nodeIndex].c_table.Hz_to_int(rcvd_bw, ' '), rcvd_cr,
                                     knownNodes[nodeIndex].c_table.Hz_to_int(rcvd_cf, ' '));
-            if(printttt){
-//                std::cout<<"rcvd_idx: " << rcvd_idx<<endl;
-            }
             int next_setup = knownNodes[nodeIndex].c_table.RSSI_table_size-1;
             if(knownNodes[nodeIndex].c_table.tkn.rtc.idx == rcvd_idx){//Everything sounds great
                 knownNodes[nodeIndex].c_table.tkn.floor = 0;
@@ -484,13 +603,35 @@ void NetworkServerApp::evaluateADR(Packet* pkt, L3Address pickedGateway, double 
             calculatedBWHz = knownNodes[nodeIndex].c_table.RSSI_table.at(next_setup).loRaBW;
             calculatedCFHz= knownNodes[nodeIndex].c_table.RSSI_table.at(next_setup).loRaCF;
             calculatedCR = knownNodes[nodeIndex].c_table.RSSI_table.at(next_setup).cr;
-            if(printttt){
-                std::cout<<"Server Sending: "<<calculatedSF <<"-" << calculatedPowerdBm << "-" <<
-                        calculatedCR << "-" << calculatedCFHz << "-" << calculatedBWHz << " idx: " <<next_setup<<endl;
-
-            }
         }
-        
+        else if(adrMethod == "LP-MAB"){
+            int next_setup=-1;
+            if(knownNodes[nodeIndex].c_table.more_than_one_exploration){
+                for (int j=1; j<knownNodes[nodeIndex].c_table.explr_itr_lim+1&&next_setup==-1; j++){
+                    for (int i=0; i<knownNodes[nodeIndex].c_table.RSSI_table_size&&next_setup==-1; i++){
+                        if (knownNodes[nodeIndex].c_table.RSSI_table_at_least_one_recvd_array[i][0] == true){
+                            if(knownNodes[nodeIndex].c_table.RSSI_table_at_least_one_recvd_array[i][j] == false){
+                                knownNodes[nodeIndex].c_table.RSSI_table_at_least_one_recvd_array[i][j] = true;
+                                knownNodes[nodeIndex].c_table.RSSI_table_at_least_one_recvd_cnt++;
+                                next_setup = i;
+                            }
+                        }
+                    }
+                }
+                if(next_setup == -1){
+                    knownNodes[nodeIndex].c_table.more_than_one_exploration = false;
+                }
+            }
+            if(!knownNodes[nodeIndex].c_table.more_than_one_exploration){
+                next_setup = knownNodes[nodeIndex].c_table.select_nxt_idx("LP-MAB", "");
+            }
+            knownNodes[nodeIndex].c_table.RSSI_table.at(next_setup).num_server_sent++;
+            knownNodes[nodeIndex].c_table.prev_sent_idx = next_setup;
+            calculatedSF = knownNodes[nodeIndex].c_table.RSSI_table.at(next_setup).sf;
+            calculatedPowerdBm = knownNodes[nodeIndex].c_table.RSSI_table.at(next_setup).tp;
+            calculatedBWHz = knownNodes[nodeIndex].c_table.RSSI_table.at(next_setup).loRaBW;
+            calculatedCFHz= knownNodes[nodeIndex].c_table.RSSI_table.at(next_setup).loRaCF;
+            calculatedCR = knownNodes[nodeIndex].c_table.RSSI_table.at(next_setup).cr;
         }
         else{
             double SNRmargin;
@@ -534,7 +675,7 @@ void NetworkServerApp::evaluateADR(Packet* pkt, L3Address pickedGateway, double 
 
         newOptions.setLoRaSF(calculatedSF);
         newOptions.setLoRaTP(calculatedPowerdBm);
-        if(adrMethod == "ADR-Lite"){
+        if(adrMethod == "LP-MAB" || adrMethod == "ADR-Lite"){
             newOptions.setLoRaBW(knownNodes[nodeIndex].c_table.Hz_to_int(calculatedBWHz, 'k'));
             newOptions.setLoRaCF(knownNodes[nodeIndex].c_table.Hz_to_int(calculatedCFHz, 'm'));
             newOptions.setLoRaCR(calculatedCR);
@@ -543,8 +684,7 @@ void NetworkServerApp::evaluateADR(Packet* pkt, L3Address pickedGateway, double 
         EV << calculatedPowerdBm << endl;
         mgmtPacket->setOptions(newOptions);
 
-
-        if( sendADR == true)
+        else if( sendADR == true)
             knownNodes[nodeIndex].numberOfSentADRPackets++;
 
         auto frameToSend = makeShared<LoRaMacFrame>();
@@ -567,17 +707,22 @@ void NetworkServerApp::evaluateADR(Packet* pkt, L3Address pickedGateway, double 
         pktAux->insertAtFront(mgmtPacket);
         pktAux->insertAtFront(frameToSend);
         socket.sendTo(pktAux, pickedGateway, destPort);
-        //        std::cout<<" Done****";
     }
     //delete pkt;
 }
 
-
 void NetworkServerApp::receiveSignal(cComponent *source, simsignal_t signalID, intval_t value, cObject *details)
 {
-    
+    if(adrMethod == "LP-MAB"){
+        if( simTime() >= (LP-MAB_first_stage*24*60*60)){
+            counterOfSentPacketsFromNodes++;
+            counterOfSentPacketsFromNodesPerSF[value-7]++;
+        }
+    }
+    else{
         counterOfSentPacketsFromNodes++;
         counterOfSentPacketsFromNodesPerSF[value-7]++;
+    }
 }
 
 } //namespace inet

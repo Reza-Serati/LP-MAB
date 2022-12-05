@@ -19,13 +19,18 @@ public:
     #define init_CF_list 868
     #define init_BW_list 125
     #define init_TP_list 2
+    #define init_retransmit_num 1
+    #define init_interval 1
 
     int SF_list_size = 6; //SF: 7,8,9,10,11,12
     int CR_list_size = 1; //CR: 5,6,7,8p
     int CF_list_size = 1; //CF: 868,869,870 MHz
     int BW_list_size = 1; //BW: 125,250,500 KHz
     int TP_list_size = 5; //TP: 2,5,8,11,14 dbm
-    int RSSI_table_size = SF_list_size*CR_list_size*BW_list_size*TP_list_size*CF_list_size;
+    int Retransmition_size = 5; //RS: 1,2,3,4,5
+    int Interval_size = 1; //IS: 1,2,3,4,5
+
+    int RSSI_table_size = SF_list_size*CR_list_size*BW_list_size*TP_list_size*CF_list_size*Retransmition_size*Interval_size;
 
 
     #define MIN(a,b) ((a) < (b) ? (a) : (b))
@@ -61,16 +66,16 @@ public:
         }
         return str1;
     }
-    int* split_bit_str(char* str, int bit_count){
+    int* split_bit_str(char* str, int size, int until){
         int* ar = new int[2];
-        char* temp = new char[bit_count];
-        for(int i=0; i<bit_count; i++)
+        char* temp = new char[size];
+        for(int i=0; i<until; i++)
             temp[i] = str[i];
-        ar[0] = bit_string_to_int(temp, bit_count);
+        ar[0] = bit_string_to_int(temp, until);
 
-        for(int i=0; i<bit_count; i++)
-            temp[i] = str[i+bit_count];
-        ar[1] = bit_string_to_int(temp, bit_count);
+        for(int i=0; i<size-until; i++)
+            temp[i] = str[until+i];
+        ar[1] = bit_string_to_int(temp, size-until);
 
         return ar;
     }
@@ -113,6 +118,12 @@ public:
         int num_server_rcvd = 0;
         int num_server_sent = 1;
 
+        ///////Serati////////////////
+        int retransmit_num = 1;
+        int retransmit_intv = 1;
+        int* repli_explr_state;
+//        int explr_retransmition_cnt = 0;
+
     };
     struct temp_known_node{
         MacAddress addr;
@@ -131,12 +142,13 @@ public:
     bool list_done = false;
 
     ////////////////Repli//////////////////////////////////
-    int repli_max_interval = 5;
-//    int repli_sending_interval_time = 1;
-//    int repli_interval_count = 0;
-//    bool repli_retransmiting = false;
-
-
+    int repli_max_interval = 3;
+    int repli_interval_time = 5;
+    int repli_explr_cnt;
+    int tmpLoRaSF;
+    int repli_prev_rcvd_seq = 0;
+//    int* explr_arr = new int[Retransmition_size];
+//    std::vector<int> explr_arr_list;
 
     //////////////////////////////////////////////////////
     ////////////////Beni//////////////////////////////////
@@ -203,74 +215,127 @@ public:
         return weight;
     }
     int counterrrr = 0;
-    int select_nxt_idx(){
-//        std::cout<<"\nSelecting Next Index\n";
-        std::vector<RSSI_table_cell> rt;
-        struct wght_rand_cell{
-            double range;
-            int idx;
-        };
-        double max_value = -1;
-        int max_idx = int(rand() % RSSI_table_size);
-        for(int i=0; i<RSSI_table_size; i++){
-            if(RSSI_table.at(i).prob >= max_value){
-                max_value = RSSI_table.at(i).prob;
-                max_idx = i;
+    int select_nxt_idx(std::string adrMethod, std::string approach){
+        if(adrMethod == "beni"){
+    //        std::cout<<"\nSelecting Next Index\n";
+            std::vector<RSSI_table_cell> rt;
+            struct wght_rand_cell{
+                double range;
+                int idx;
+            };
+            double max_value = -1;
+            int max_idx = int(rand() % RSSI_table_size);
+            for(int i=0; i<RSSI_table_size; i++){
+                if(RSSI_table.at(i).prob >= max_value){
+                    max_value = RSSI_table.at(i).prob;
+                    max_idx = i;
+                }
             }
-        }
-        ///////////////////////////////////////////////////////////////////////////////////////////////
-//        counterrrr++;
-//        if(counterrrr < 5){
-//            std::cout<<"MAX_IDX " << max_idx <<"\n";
-//            return max_idx;
-//        }
-//        counterrrr = 0;
-//        else{
-//            counterrrr = 0;
-//            int randdd = int(rand() % RSSI_table_size);
-//            std::cout<<"randdd " << randdd <<"\n";
-//            return randdd;
-//        }
-        ///////////////////////////////////////////////////////////////////////////////////////////////
-//        std::cout<<"MAX_VALUE:" << max_value <<std::endl;
-        std::vector<wght_rand_cell> wght_rand_vect;
+            ///////////////////////////////////////////////////////////////////////////////////////////////
+    //        counterrrr++;
+    //        if(counterrrr < 5){
+    //            std::cout<<"MAX_IDX " << max_idx <<"\n";
+    //            return max_idx;
+    //        }
+    //        counterrrr = 0;
+    //        else{
+    //            counterrrr = 0;
+    //            int randdd = int(rand() % RSSI_table_size);
+    //            std::cout<<"randdd " << randdd <<"\n";
+    //            return randdd;
+    //        }
+            ///////////////////////////////////////////////////////////////////////////////////////////////
+    //        std::cout<<"MAX_VALUE:" << max_value <<std::endl;
+            std::vector<wght_rand_cell> wght_rand_vect;
 
-        int sum_of_weight=0;
-        double rand_range=0;
-        // for having lower power consumption, the lower indexes have higher weights
-        std::vector<int> tmp_weight  = weighting();
-        for(int i=0; i<RSSI_table_size; i++) {
-            if(RSSI_table.at(i).prob >= 0.85 * (max_value) && max_idx != i){
+            int sum_of_weight=0;
+            double rand_range=0;
+            // for having lower power consumption, the lower indexes have higher weights
+            std::vector<int> tmp_weight  = weighting();
+            for(int i=0; i<RSSI_table_size; i++) {
+                if(RSSI_table.at(i).prob >= 0.85 * (max_value) && max_idx != i){
 
-                wght_rand_cell wrc;
-//                if (RSSI_table.at(i).num_server_sent == 0)
-//                    wrc.range = RSSI_table.at(i).prob * 1;
-//                else
+                    wght_rand_cell wrc;
+    //                if (RSSI_table.at(i).num_server_sent == 0)
+    //                    wrc.range = RSSI_table.at(i).prob * 1;
+    //                else
 
-                wrc.range = RSSI_table.at(i).prob * RSSI_table.at(i).num_server_rcvd * tmp_weight.at(i)
-                        *RSSI_table.at(i).num_server_sent;
-//                    wrc.range = RSSI_table.at(i).prob * RSSI_table.at(i).num_node_sent;
-                rand_range += wrc.range;
-                wrc.idx = i;
-                rt.push_back(RSSI_table.at(i));
-                wght_rand_vect.push_back(wrc);
+                    wrc.range = RSSI_table.at(i).prob * RSSI_table.at(i).num_server_rcvd * tmp_weight.at(i)
+                            *RSSI_table.at(i).num_server_sent;
+    //                    wrc.range = RSSI_table.at(i).prob * RSSI_table.at(i).num_node_sent;
+                    rand_range += wrc.range;
+                    wrc.idx = i;
+                    rt.push_back(RSSI_table.at(i));
+                    wght_rand_vect.push_back(wrc);
+                }
             }
-        }
-        double t  = std::fmod(rand(), rand_range );
-//        std::cout << rand_range << "\n";
-//        for (int i=0; i<15; i++)
-//                std::cout << std::fmod(rand(), rand_range ) << "\t";
-//        std::cout<<"\nRandom: " << t << std::endl;
-        double tt = 0;
-        for(int i=0; i<wght_rand_vect.size(); i++) {
-            tt += wght_rand_vect.at(i).range;
-            if(tt>=t){
-//                std::cout<<"\nSelected Idx: " << RSSI_table.at(wght_rand_vect.at(i).idx).lable << std::endl;
-                return wght_rand_vect.at(i).idx;
+            double t  = std::fmod(rand(), rand_range );
+    //        std::cout << rand_range << "\n";
+    //        for (int i=0; i<15; i++)
+    //                std::cout << std::fmod(rand(), rand_range ) << "\t";
+    //        std::cout<<"\nRandom: " << t << std::endl;
+            double tt = 0;
+            for(int i=0; i<wght_rand_vect.size(); i++) {
+                tt += wght_rand_vect.at(i).range;
+                if(tt>=t){
+    //                std::cout<<"\nSelected Idx: " << RSSI_table.at(wght_rand_vect.at(i).idx).lable << std::endl;
+                    return wght_rand_vect.at(i).idx;
+                }
             }
+            return int(rand() % RSSI_table_size);
         }
-        return int(rand() % RSSI_table_size);
+        else if(adrMethod == "serati"){
+            struct tmp{
+                int succ_rcvd=0;
+                int fail_rcvd=0;
+                int transmit_cnt=0;
+                double select_percentage=0.0;
+                int idx=-1;
+            };
+            std::vector<tmp> tmp_vec;
+            for(int i=0; i< RSSI_table_size; i++){
+                tmp t;
+                while(RSSI_table.at(i).repli_explr_state[t.transmit_cnt] != -1){
+                    if (RSSI_table.at(i).repli_explr_state[t.transmit_cnt] == 1){
+                        t.succ_rcvd++;
+                    }
+                    if (RSSI_table.at(i).repli_explr_state[t.transmit_cnt] == 0){
+                        t.fail_rcvd++;
+                    }
+                    t.transmit_cnt++;
+                }
+                t.idx=i;
+                tmp_vec.push_back(t);
+            }
 
+            int counter = 0;
+            for(tmp i : tmp_vec){
+                tmp_vec.at(counter).select_percentage = double((i.succ_rcvd * (RSSI_table_size-counter))) / double(i.transmit_cnt);
+                counter++;
+            }
+            if (approach == "max"){
+                int max_idx=-1;
+                double max_value = -1;
+                for(tmp i : tmp_vec){
+                    if(i.select_percentage >= max_value){
+                        max_value = i.select_percentage;
+                        max_idx = i.idx;
+                    }
+                }
+                return max_idx;
+            }
+            if (approach == "random"){
+                return int(rand() % RSSI_table_size);
+            }
+            if (approach == "weighted_random"){
+                return int(rand() % RSSI_table_size);
+            }
+            if (approach == "AI"){
+                return int(rand() % RSSI_table_size);
+            }
+
+        }
+        return 0;
     }
     void cal_weight(int rcvd, int prev_rcvd, bool print){
         int approach = 3;
@@ -392,14 +457,9 @@ public:
         return inet::units::values::Hz(in);
     }
 
-    void exploraton_done(MacAddress addrr, bool stat){
-//        if (RSSI_table.at(RSSI_table_size-1).num_node_sent == explr_itr_lim){
-            MacAddress add (0x0AAA00000001);
+    void exploraton_done(){
             is_explr = !stat;
             is_explt = !is_explr;
-//            if (add == addrr)
-//                std::cout<<"KIRRRRRR\n";
-//        }
     }
     int get_rssi_table_cell_index(int sf, int tp, int bw, int cr, int cf){
 //        std::cout<< "SF: " << sf << " TP: " << tp << " BW: " << bw
@@ -415,15 +475,45 @@ public:
         std::cout<<"\n****Custom Table Index Not Found (get_rssi_table_cell_index() )\n";
         return -1;
     }
+    int get_rssi_table_cell_index2(int sf, int tp, int bw, int cr, int cf, int retransmit, int interval){
+        for(int i=0; i<RSSI_table_size; i++){
+            if (RSSI_table.at(i).sf == sf)
+                if (RSSI_table.at(i).bw == bw)
+                    if (RSSI_table.at(i).cr == cr)
+                        if (RSSI_table.at(i).tp == tp)
+                            if (RSSI_table.at(i).cf == cf)
+                                if (RSSI_table.at(i).retransmit_num == retransmit)
+                                    if (RSSI_table.at(i).retransmit_intv == interval)
+                                        return i;
+        }
+        std::cout<<"\n****Custom Table Index Not Found (get_rssi_table_cell_index() )\n";
+        return -1;
+    }
 
 
-    void init_table(){
+    void init_table(std::string adrMethod){
 //        max_explr_days = ceil((end_node_sending_interval * RSSI_table_size * explr_itr_lim) / (24 * 60 * 60)) + 1;
 //        std::cout << (end_node_sending_interval * RSSI_table_size * explr_itr_lim) << "\n";
 //        std::cout << float(end_node_sending_interval * RSSI_table_size * explr_itr_lim / 24 / 60 / 60) << "\n";
 //        std::cout << ceil((end_node_sending_interval * RSSI_table_size * explr_itr_lim) / (24 * 60 * 60)) << "\n";
 //        max_explr_days = 3;
 
+        if(adrMethod == "beni" || adrMethod == "greedy"){
+            BW_list_size = 1;
+            CF_list_size = 1;
+            CR_list_size = 1;
+            SF_list_size = 6;
+            TP_list_size = 5;
+            Retransmition_size = 1;
+            Interval_size = 1;
+            #undef init_SF_list
+            #undef init_TP_list
+            #define init_SF_list 12
+            #define init_TP_list 14
+            #define init_retransmit_num 1
+            #define init_interval 1
+
+            RSSI_table_size = SF_list_size*CR_list_size*BW_list_size*TP_list_size*CF_list_size*Retransmition_size*Interval_size;
             for (int i=0; i<SF_list_size; i++){
                     for (int j=0; j<CR_list_size; j++){
                         for (int k=0; k<BW_list_size; k++){
@@ -451,15 +541,77 @@ public:
                         }
                     }
                 }
-                sort(RSSI_table.begin(), RSSI_table.end(), less_than_key());
-//                for (int i=0;i<RSSI_table_size; i++){
-//                    if(i%3 == 0)
-//                        std::cout<<endl;
-//                    std::cout << i << ". "<< RSSI_table[i].lable<<"\t";
-//                }
+
+        }
+        else if (adrMethod == "serati"){
+            BW_list_size = 1;
+            CF_list_size = 1;
+            CR_list_size = 1;
+            SF_list_size = 1;
+            TP_list_size = 1;
+            Retransmition_size = 1;
+            Interval_size = 1;
+            #undef init_SF_list
+            #undef init_TP_list
+            #undef init_retransmit_num
+            #undef init_interval
+            #define init_SF_list 12
+            #define init_TP_list 14
+            #define init_retransmit_num 3
+            #define init_interval 5
+
+            RSSI_table_size = SF_list_size*CR_list_size*BW_list_size*TP_list_size*CF_list_size*Retransmition_size*Interval_size;
+            for (int i=0; i<SF_list_size; i++){
+                for (int j=0; j<CR_list_size; j++){
+                    for (int k=0; k<BW_list_size; k++){
+                        for (int l=0; l<TP_list_size; l++){
+                            for (int m=0; m<CF_list_size; m++){
+                                for (int n=0; n<Retransmition_size; n++){
+                                    for (int o=0; o<Interval_size; o++){
+                                        RSSI_table_cell rtc;
+
+                                        rtc.sf = init_SF_list + i;
+                                        rtc.cr = init_CR_list + j;
+                                        rtc.cf = init_CF_list+(m*1);
+                                        rtc.loRaCF = int_to_Hz(rtc.cf, 'm');
+                                        rtc.bw = init_BW_list*(k+1);
+                                        if (k==2) rtc.bw = 500;
+                                        rtc.loRaBW = int_to_Hz(rtc.bw, 'k');
+                                        rtc.tp = init_TP_list + 3*l;
+                                        rtc.retransmit_num = init_retransmit_num + n;
+                                        rtc.retransmit_intv = init_interval + (o*2);;
+                                        rtc.repli_explr_state = new int [rtc.retransmit_num*9999];
+                                        for (int ii=0; ii< rtc.retransmit_num*9999; ii++){
+                                            rtc.repli_explr_state[ii] = -1;
+                                        }
+//                                        rtc.repli_explr_state = {-1};
+
+                                        rtc.energy = cal_energy(rtc.sf, rtc.bw, rtc.cr, rtc.tp, rtc.cf) * rtc.retransmit_num;
+                                        rtc.lable = std::to_string(rtc.sf) + "-" + std::to_string(rtc.tp)
+                                                + "-" + std::to_string(rtc.bw) +
+                                                 "-" + std::to_string(rtc.cf) +"-" + std::to_string(rtc.cr)
+                                                +"-" + std::to_string(rtc.retransmit_num) +"-" + std::to_string(rtc.retransmit_intv);
+
+
+                                        RSSI_table.push_back(rtc);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        sort(RSSI_table.begin(), RSSI_table.end(), less_than_key());
+//        for (int i=0;i<RSSI_table_size; i++){
+//            if(i%3 == 0)
 //                std::cout<<endl;
-//                std::cout<< "\nTable Created with " << RSSI_table_size << " Item\n";
-//                print_rssi_table();
+//            std::cout << i << ". "<< RSSI_table[i].lable<<"\t";
+//        }
+        //                std::cout<<endl;
+        //                std::cout<< "\nTable Created with " << RSSI_table_size << " Item\n";
+//        print_rssi_table();
     }
     void print_rssi_table(){
         for (int i=0;i<RSSI_table_size; i++){
@@ -471,7 +623,24 @@ public:
 //                std::cout<< "\nTable Created with " << RSSI_table_size << " Item\n";
 //                print_rssi_table();
     }
+    void bobo_log(){
+        for (int i=0; i<RSSI_table_size; i++){
+            std::cout<<"Index" << i << "\t";
+            int tmp = RSSI_table.at(i).retransmit_num;
+            for (int j=0; j< tmp*explr_itr_cnt; j++){
+                if(j % tmp == 0)
+                    std::cout<<" ";
+                std::cout<<RSSI_table.at(i).repli_explr_state[j];
+//                if(RSSI_table.at(i).repli_explr_state[j])
+//                    std::cout<<"1";
+//                else
+//                    std::cout<<"0";
 
+            }
+            std::cout<<endl;
+        }
+
+    }
 };
 }
 #endif

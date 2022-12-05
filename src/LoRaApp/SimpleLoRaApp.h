@@ -27,7 +27,7 @@
 #include "LoRaAppPacket_m.h"
 #include "LoRa/LoRaMacControlInfo_m.h"
 
-//////////////////////Exhaustive - Beni////////////////////////////
+//////////////////////LP-MAB////////////////////////////
 #include "../Customize/Customize_Table.h"
 ///////////////////////////////////////////////////////////
 
@@ -95,13 +95,8 @@ class SimpleLoRaApp : public cSimpleModule, public ILifecycle
         std::string adrMethod;
         MacAddress address;
         int addrrss = -1;
-        ///////////////////Exhaustive - Beni//////////////////////////////
+        ///////////////////LP-MAB//////////////////////////////
         Customize_Table c_table;
-//        extern Customize_Table c_table_srt;
-        cMessage *send_replicate_msg;
-        int repli_max_interval = 2;
-        int repli_sending_interval_time = 2;
-        ///////////////////Zargari//////////////////////////////
 };
 
 }

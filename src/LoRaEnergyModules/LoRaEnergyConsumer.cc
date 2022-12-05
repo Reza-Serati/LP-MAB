@@ -162,6 +162,14 @@ void LoRaEnergyConsumer::receiveSignal(cComponent *source, simsignal_t signal, i
             lastEnergyBalanceUpdate = currentSimulationTime;
             lastPowerConsumption = powerConsumption;
 //            std::cout<<adrMethod<<"\n";
+            if (adrMethod == "LP-MAB"){
+                if(currentSimulationTime > (3 * 24* 60* 60) && !warmupDone){
+                    warmupDone = true;
+                    energyBalance = J(0);
+                    totalEnergyConsumed = 0;
+                    lastPowerConsumption = W(0);
+                }
+            }
         //}
     }
     else

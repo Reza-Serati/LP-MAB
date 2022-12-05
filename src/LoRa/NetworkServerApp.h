@@ -30,7 +30,7 @@
 #include "../LoRaApp/LoRaAppPacket_m.h"
 #include <list>
 
-//////////////////////Exhaustive - Beni////////////////////////////
+//////////////////////Exhaustive - LP-MAB////////////////////////////
 #include "../Customize/Customize_Table.h"
 int adr_sent_count = 0;
 ///////////////////////////////////////////////////////////
@@ -57,12 +57,13 @@ public:
     std::list<double> adrListSNIR;
     std::list<double> adrListRSSI;
 //    std::list<double> adrListSeqNo;
+    std::vector<double> adrListSeqNo;
     cOutVector *historyAllSNIR;
     cOutVector *historyAllRSSI;
     cOutVector *receivedSeqNumber;
     cOutVector *calculatedSNRmargin;
 
-    ////////////////////////////Beni//////////////////////
+    ////////////////////////////LP-MAB//////////////////////
     Customize_Table c_table;
     //////////////////////////////////////////////////////
 };
@@ -90,9 +91,17 @@ class NetworkServerApp : public cSimpleModule, cListener
     std::vector<receivedPacket> receivedPackets;
     int localPort = -1, destPort = -1;
     std::vector<std::tuple<MacAddress, int>> recvdPackets;
+    /////////////////// LP-MAB//////////////////////////////
+    std::vector<knownNode> knownNodes_copy;
+    int LP-MAB_first_stage = 2;
+    ///////////////////////////////////////////////////////////
+
     UdpSocket socket;
     cMessage *selfMsg = nullptr;
     int totalReceivedPackets;
+    /////////////////////////////serati///////////////////////////////////////////////
+    int totalReceivedUniquePackets;
+    ////////////////////////////////////////////////////////////////////////////
 
     std::string adrMethod;
     double adrDeviceMargin;

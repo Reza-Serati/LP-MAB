@@ -20,7 +20,6 @@
 #include "inet/common/packet/Packet.h"
 #include "unistd.h"
 
-bool printttt = false;
 namespace flora {
 
 Define_Module(SimpleLoRaApp);
@@ -31,13 +30,24 @@ void SimpleLoRaApp::initialize(int stage)
 {
     /////////////////////////////////////////////////////
     adrMethod = par("myADR").stdstringValue();
+    if(adrMethod == "LP-MAB" ){
+        my_node_address_test_count ++;
+        addrrss = my_node_address_test_count;
+        if(my_node_address_test_count == 1){
+            addrrss =  999;
+        }
+        if (!c_table.list_done){
+            c_table.init_table("LP-MAB" );
+            c_table.list_done = true;
+        }
+    }
     else if(adrMethod == "ADR-Lite"){
         loRaTP = 14;
         loRaSF = 12;
         loRaBW = inet::units::values::kHz(125);
         loRaCR = 4;
         if (!c_table.list_done){
-            c_table.init_table();
+            c_table.init_table("ADR-Lite");
             c_table.list_done = true;
         }
     }
@@ -135,13 +145,16 @@ void SimpleLoRaApp::handleMessage(cMessage *msg)
 {
 
     if (msg->isSelfMessage()) {
-//        if (adrMethod == "serati"){
-//        }
         if (msg == sendMeasurements)
         {
             sendJoinRequest();
+            if (adrMethod == "LP-MAB"){
+                if(simTime() >= (c_table.max_explr_days*24*60*60)){
+                    sentPackets++;
+                }
+            }else{
                 sentPackets++;
-            
+            }
             delete msg;
             if(numberOfPacketsToSend == 0 || sentPackets < numberOfPacketsToSend)
             {
@@ -153,11 +166,27 @@ void SimpleLoRaApp::handleMessage(cMessage *msg)
                 if(loRaSF == 11) time = 85.6064;
                 if(loRaSF == 12) time = 171.2128;
 
+                if(adrMethod == "serati"){
+                    //////////////////////////////////////////////////////////////////////////////////////////
+                    int var = 2; //ToDo
+                    //////////////////////////////////////////////////////////////////////////////////////////
+//                    c_table.Interval_size = ceil(time/100) * var;
+                    do {
+//                        count ++;
+//                        if(count > 1)
+//                            cout << "BOOBya\t" << count << " : " << timeToNextPacket << "\n";
+                        timeToNextPacket = par("timeToNextPacket");
+
+                        // ToDo: check whether you can import delay/receive window time from mac-file to supersede with 4
+                    } while(timeToNextPacket <= time || timeToNextPacket <= c_table.repli_max_interval * c_table.repli_interval_time + 4);
+
+                }
+                else{
                     do {
                         timeToNextPacket = par("timeToNextPacket");
                         //if(timeToNextPacket < 3) error("Time to next packet must be grater than 3");
                     } while(timeToNextPacket <= time);
-                
+                }
                 sendMeasurements = new cMessage("sendMeasurements");
                 scheduleAt(simTime() + timeToNextPacket, sendMeasurements);
             }
@@ -176,30 +205,32 @@ void SimpleLoRaApp::handleMessage(cMessage *msg)
 
 void SimpleLoRaApp::handleMessageFromLowerLayer(cMessage *msg)
 {
-//    LoRaAppPacket *packet = check_and_cast<LoRaAppPacket *>(msg);
-    if(printttt){
-        if(addrrss == 999){
-            std::cout<<"Ack Received\n";
-        }
-    }
     auto pkt = check_and_cast<Packet *>(msg);
     const auto & packet = pkt->peekAtFront<LoRaAppPacket>();
-    
+    if(adrMethod == "LP-MAB"){
+        sendNextPacketWithADRACKReq = false;
+        if( simTime() >= (c_table.max_explr_days*24*60*60))
+            receivedADRCommands++;
+    }
+    else{
         receivedADRCommands++;
-    
+    }
     if(evaluateADRinNode)
     {
         ADR_ACK_CNT = 0;
         if(packet->getMsgType() == TXCONFIG){
-            if(packet->getOptions().getLoRaTP() != -1)
-                loRaTP = packet->getOptions().getLoRaTP();
-            if(packet->getOptions().getLoRaSF() != -1){
-                loRaSF = packet->getOptions().getLoRaSF();
-            }
+//            if(adrMethod == "serati");
+//            else{
+                if(packet->getOptions().getLoRaTP() != -1)
+                    loRaTP = packet->getOptions().getLoRaTP();
+                if(packet->getOptions().getLoRaSF() != -1){
+                    loRaSF = packet->getOptions().getLoRaSF();
+                }
+//            }
             EV << "New TP " << loRaTP << endl;
             EV << "New SF " << loRaSF << endl;
 
-            if(adrMethod == "ADR-Lite"){
+            if(adrMethod == "LP-MAB" || adrMethod == "ADR-Lite"){
                 if(packet->getOptions().getLoRaBW() != -1)
                     loRaBW = c_table.int_to_Hz(packet->getOptions().getLoRaBW(),' ');
                 if(packet->getOptions().getLoRaCF() != -1)
@@ -207,14 +238,18 @@ void SimpleLoRaApp::handleMessageFromLowerLayer(cMessage *msg)
                 if(packet->getOptions().getLoRaCR() != -1)
                     loRaCR = packet->getOptions().getLoRaCR();
             }
-            if(adrMethod == "ADR-Lite"){
+            if(adrMethod == "LP-MAB"){
+                int rcvd_idx = c_table.get_rssi_table_cell_index(loRaSF, loRaTP, c_table.Hz_to_int(loRaBW, ' '),
+                        loRaCR, c_table.Hz_to_int(loRaCF, ' '));
+
+
+                if(c_table.is_explr){
+                        c_table.RSSI_table.at(rcvd_idx).num_node_rcvd++;
+                }
+            }
+            else if(adrMethod == "ADR-Lite"){
                 int rcvd_idx = c_table.get_rssi_table_cell_index(loRaSF, loRaTP, c_table.Hz_to_int(loRaBW, ' '),
                                         loRaCR, c_table.Hz_to_int(loRaCF, ' '));
-                if(printttt){
-                    std::cout<<"Node Received: ";
-                    std::cout << loRaSF <<"-" << loRaTP << " idx: "<<rcvd_idx << endl;
-                    std::cout << "********************************************************" <<endl;
-                }
             }
         }
     }
@@ -248,6 +283,47 @@ void SimpleLoRaApp::sendJoinRequest()
         sendNextPacketWithADRACKReq = false;
     }
 
+    if(adrMethod == "LP-MAB"){
+        int prev_sent_idx = c_table.prev_sent_idx;
+
+        if(c_table.is_explr){
+            loRaBW = c_table.RSSI_table.at(prev_sent_idx).loRaBW;
+            loRaCF = c_table.RSSI_table.at(prev_sent_idx).loRaCF;
+            loRaSF = c_table.RSSI_table.at(prev_sent_idx).sf;
+            loRaCR = c_table.RSSI_table.at(prev_sent_idx).cr;
+//            loRaTP = mW(math::dBmW2mW(c_table.RSSI_table.at(prev_sent_idx).tp));
+            loRaTP = c_table.RSSI_table.at(prev_sent_idx).tp;
+            c_table.RSSI_table.at(prev_sent_idx).num_node_sent++;
+            prev_sent_idx++;
+            if(prev_sent_idx == c_table.RSSI_table_size){
+                prev_sent_idx = 0;
+            }
+            c_table.prev_sent_idx = prev_sent_idx;
+        }
+
+    }
+    else if(adrMethod == "serati"){
+        sendNextPacketWithADRACKReq = true;
+        int prev_sent_idx = c_table.prev_sent_idx;
+        if(c_table.is_explr){
+            loRaBW = c_table.RSSI_table.at(prev_sent_idx).loRaBW;
+            loRaCF = c_table.RSSI_table.at(prev_sent_idx).loRaCF;
+            loRaSF = c_table.RSSI_table.at(prev_sent_idx).sf;
+//            loRaSF = 12;
+            loRaCR = c_table.RSSI_table.at(prev_sent_idx).cr;
+//            loRaTP = mW(math::dBmW2mW(c_table.RSSI_table.at(prev_sent_idx).tp));
+            loRaTP = c_table.RSSI_table.at(prev_sent_idx).tp;
+            c_table.RSSI_table.at(prev_sent_idx).num_node_sent++;
+            c_table.repli_max_interval = c_table.RSSI_table.at(prev_sent_idx).retransmit_num;
+            c_table.repli_interval_time = c_table.RSSI_table.at(prev_sent_idx).retransmit_intv;
+            prev_sent_idx++;
+            if(prev_sent_idx == c_table.RSSI_table_size){
+                prev_sent_idx = 0;
+            }
+            c_table.prev_sent_idx = prev_sent_idx;
+        }
+    }
+
     auto loraTag = pktRequest->addTagIfAbsent<LoRaTag>();
     loraTag->setBandwidth(loRaBW);
     loraTag->setCenterFrequency(loRaCF);
@@ -258,51 +334,43 @@ void SimpleLoRaApp::sendJoinRequest()
     sfVector.record(loRaSF);
     tpVector.record(loRaTP);
     pktRequest->insertAtBack(payload);
-//    if(adrMethod == "serati"){
-//    }
-
     send(pktRequest, "appOut");
 
-    ///////////////////////////////////////////////////////////////////////////////////////
-    if(printttt){
-//        std::cout<<"Simple LoRa App Sending "<<simTime()<<std::endl;
-//        std::cout << "\n" << addrrss << ": ";
-
-        if(adrMethod == "ADR-Lite"){
-            int rcvd_idx = c_table.get_rssi_table_cell_index(loRaSF, loRaTP, c_table.Hz_to_int(loRaBW, ' '),
-                    loRaCR, c_table.Hz_to_int(loRaCF, ' '));
-            std::cout<<"Node Sending  "<<loRaSF << "-" << loRaTP << "-" << loRaCF << "-" << loRaBW << "-" <<
-                    loRaCR << " idx: " << rcvd_idx <<endl;;
+    if(adrMethod=="LP-MAB"){
+        c_table.node_total_pckt_sent++;
+        if(c_table.node_total_pckt_sent >= c_table.explr_itr_lim * c_table.RSSI_table_size &&
+                c_table.is_explr){
+            ADR_ACK_CNT = 0;
+            MacAddress add (0x0AAA00999999);
+            c_table.exploraton_done();
         }
-        else{
-            std::cout<<"Node Sending  "<<loRaSF << "-" << loRaTP << "-" << loRaCF << "-" << loRaBW << "-" << loRaCR <<endl;;
-        }
-//        if (sendNextPacketWithADRACKReq)
-//            std::cout << " + Ack Req \n";
-//        else
-//            std::cout<<"\n";
-//                "-" << loRaBW << "-" << loRaCF <<"-" << loRaCR << endl;
     }
-    c_table.node_total_pckt_sent++;
-
     /////////////////////////////////////////////////////////////////////////////////////////
     if(evaluateADRinNode)
     {
         ADR_ACK_CNT++;
-        if(adrMethod == "ADR-Lite"){
+        if(adrMethod=="LP-MAB"){
+            int t1=5;
+            int t2=10;
+            if(c_table.is_explt){
+                if(ADR_ACK_CNT == t1){
+                    sendNextPacketWithADRACKReq = true;
+                }
+                if(ADR_ACK_CNT >= t1 + t2){
+                    ADR_ACK_CNT = 0;
+                    increaseSFIfPossible();
+                }
+            }
+        }
+        else if(adrMethod == "ADR-Lite"){
             int t1=5;
             int t2=10;
             if(ADR_ACK_CNT == t1){
                 sendNextPacketWithADRACKReq = true;
-//                if(addrrss == 999 && printttt){
-//                    cout << "\nNeed Req Bro\n";
-//                }
             }
             if(ADR_ACK_CNT >= t1 + t2){
                 ADR_ACK_CNT = 0;
                 increaseSFIfPossible();
-//                if(addrrss == 999 && printttt){
-//                    cout << "SF ++ Happend\n";
                 }
         }
         else{
@@ -315,8 +383,6 @@ void SimpleLoRaApp::sendJoinRequest()
             }
         }
     }
-//    std::cout<<"num: " << 2 << "\t";
-//            send(pktRequest, "appOut");
         emit(LoRa_AppPacketSent, loRaSF);
 
 }
@@ -328,6 +394,10 @@ void SimpleLoRaApp::increaseSFIfPossible()
             loRaSF++;
         if(loRaTP < 14)
             loRaTP+=3;
+    }
+    else{ 
+        if(loRaSF<12) {
+            loRaSF ++;
     }
 
 }
